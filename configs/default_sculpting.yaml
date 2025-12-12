@@ -1,0 +1,26 @@
+# configs/default_sculpting.yaml
+
+# 数据路径
+# dataset_path: "/home/lkh/data/point_cloud/ShapeNetCore.v2"
+dataset_path: "/home/lkh/data/point_cloud/ShapeNetCore.v2/02691156/10155655850468db78d106ce0a280f87/models/model_normalized.ply"
+
+# 管道参数
+pipeline:
+  visualize: True    # 是否开启可视化
+  output_dir: "./output/sculptures"
+
+# 算法参数 - 拟合器
+quadric_fitter:
+  k: 2000.0
+
+# 算法参数 - 分割器
+patch_segmenter:
+  n_patches: 32
+
+# 算法参数 - 优化器
+refiner:
+  error_tolerance: 0.005
+
+# 算法参数 - 增强器
+augmentor:
+  thickness: 0.04
