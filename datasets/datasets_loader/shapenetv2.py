@@ -100,116 +100,128 @@ class DatasetIndex:
 # =========================================================
 # 2. 点云加载类：只负责“根据文件路径读点云”
 # =========================================================
-class PointCloudLoader:
+class GeometryLoader:
     """
-    负责根据单个模型路径加载点云：
-    - 支持 obj/ply/off/stl
-    - 优先用 Open3D 加载点云或网格并采样
-    - 无 Open3D 时，回退到手动解析 OBJ 顶点
-    - 最后做中心化 + 单位球缩放
+    负责根据单个模型路径加载几何数据（默认 Open3D 可用）：
+    - 支持 obj/ply/off/stl 等 Open3D 支持的格式
+    - 可返回：
+        1) 点云 points (N, 3)
+        2) 网格 faces (M, 3) 以及 vertices (V, 3)
+        3) 二者都返回（点云 + 网格）
+    - 最后可选做中心化 + 单位球缩放（对 points/vertices 一致应用）
     """
 
-    def __init__(self, samples=5000):
+    def __init__(self, samples: int = 5000, normalize: bool = True):
         """
-        samples: 用 mesh 采样点云时的点数（仅在有 Open3D 且输入是 mesh 时使用）
+        samples: 当输入是 mesh 且需要点云时，采样点数（Poisson disk）
+        normalize: 是否做中心化 + 单位球缩放
         """
         self.samples = samples
+        self.do_normalize = normalize
 
-    def load(self, path: str):
+    def load(
+        self,
+        path: str,
+        return_points: bool = True,
+        return_faces: bool = False,
+        sample_if_mesh: bool = True,
+    ):
         """
-        加载指定路径的模型，返回归一化后的点云 (N, 3) 或 None
+        加载指定路径的模型数据。
+
+        参数:
+        - return_points: 是否返回点云 points (N,3)
+        - return_faces: 是否返回网格 faces (M,3) 以及 vertices (V,3)
+        - sample_if_mesh: 若点云读取为空且能读到 mesh，是否从 mesh 采样点云
+
+        返回:
+        - 只要 points: points
+        - 只要 faces: (vertices, faces)
+        - 两者都要: (points, vertices, faces)
+        - 失败: None
         """
+        if not (return_points or return_faces):
+            # 没有任何输出需求
+            return None
+
         points = None
+        vertices = None
+        faces = None
 
-        # 1. 有 Open3D，则优先用 Open3D
-        if HAS_OPEN3D:
-            points = self._load_with_open3d(path)
-
-        # 2. 如果 Open3D 失败 / 不可用，则尝试 OBJ fallback
-        if points is None:
-            points = self._load_obj_fallback(path)
-
-        # 3. 归一化
-        if points is not None and len(points) > 10:
-            return self._normalize(points)
-
-        return None
-
-    # ----------------- 内部方法 -----------------
-
-    def _load_with_open3d(self, path):
         try:
             o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
 
-            # 先尝试读取为点云
-            pcd = o3d.io.read_point_cloud(path)
+            # 1) 尝试读取点云
+            if return_points:
+                pcd = o3d.io.read_point_cloud(path)
+                if len(pcd.points) > 0:
+                    points = np.asarray(pcd.points, dtype=np.float32)
 
-            # 如果点云为空，再尝试读 mesh，并采样出点云
-            if len(pcd.points) == 0:
+            # 2) 若需要 faces 或 点云为空但允许从 mesh 采样，则读取 mesh
+            need_mesh = return_faces or (return_points and points is None and sample_if_mesh)
+            mesh = None
+            if need_mesh:
                 mesh = o3d.io.read_triangle_mesh(path)
-                if len(mesh.vertices) > 0:
-                    pcd = mesh.sample_points_poisson_disk(self.samples)
-                else:
-                    return None
+                if mesh is not None and len(mesh.vertices) > 0:
+                    vertices = np.asarray(mesh.vertices, dtype=np.float32)
+                    faces = np.asarray(mesh.triangles, dtype=np.int64)  # (M,3) 三角面
 
-            points = np.asarray(pcd.points)
-            return points
+                    # 从 mesh 采样点云（仅当点云还没读到）
+                    if return_points and points is None and sample_if_mesh:
+                        pcd2 = mesh.sample_points_poisson_disk(self.samples)
+                        if len(pcd2.points) > 0:
+                            points = np.asarray(pcd2.points, dtype=np.float32)
 
-        except Exception:
-            return None
-
-    def _load_obj_fallback(self, path):
-        """
-        无 Open3D 或 Open3D 加载失败时，简单解析 .obj 的 'v x y z'
-        """
-        if not path.lower().endswith(".obj"):
-            return None
-
-        verts = []
-        try:
-            with open(path, "r", encoding="latin-1") as f:
-                for line in f:
-                    if line.startswith("v "):
-                        parts = line.split()
-                        verts.append([float(parts[1]), float(parts[2]), float(parts[3])])
-
-            if len(verts) == 0:
+            # 3) 若读取失败
+            if (return_points and points is None) and (not return_faces):
+                return None
+            if return_faces and (vertices is None or faces is None or len(faces) == 0):
+                # 注意：某些文件可能只有点云没有 mesh
                 return None
 
-            return np.array(verts, dtype=np.float32)
+            # 4) 归一化（让输出坐标在同一规范下）
+            if self.do_normalize:
+                points, vertices = self._normalize_consistently(points, vertices)
+
+            # 5) 按需求返回
+            if return_points and return_faces:
+                return points, vertices, faces
+            elif return_points:
+                return points
+            else:
+                return vertices, faces
 
         except Exception:
             return None
 
-    def _normalize(self, points: np.ndarray):
+    # ----------------- 内部方法 -----------------
+
+    def _normalize_consistently(self, points: np.ndarray | None, vertices: np.ndarray | None):
         """
-        中心化 + 缩放到单位球
+        对 points / vertices 做一致的中心化 + 单位球缩放：
+        - 如果有 vertices：用 vertices 估计中心与尺度（mesh 更“完整”）
+        - 否则用 points
         """
-        points = points.astype(np.float32)
-        c = np.mean(points, axis=0)
-        points = points - c
-        scale = np.max(np.linalg.norm(points, axis=1))
-        if scale > 0:
-            points = points / scale
-        return points
+        ref = None
+        if vertices is not None and len(vertices) > 10:
+            ref = vertices
+        elif points is not None and len(points) > 10:
+            ref = points
+        else:
+            return points, vertices
 
+        ref = ref.astype(np.float32)
+        c = np.mean(ref, axis=0)
+        ref_centered = ref - c
+        scale = float(np.max(np.linalg.norm(ref_centered, axis=1)))
+        if scale <= 0:
+            return points, vertices
 
-# =========================================================
-# 3. 小测试（可选）
-# =========================================================
-if __name__ == "__main__":
-    # 例 1：测试目录扫描
-    root = "/path/to/your/dataset_root"
-    if os.path.isdir(root):
-        index = DatasetIndex(root)
-        print("Total samples:", len(index))
-        if len(index) > 0:
-            e0 = index[0]
-            print("Sample[0]:", e0)
+        def apply(arr):
+            if arr is None:
+                return None
+            arr = arr.astype(np.float32)
+            arr = (arr - c) / scale
+            return arr
 
-            # 例 2：用 PointCloudLoader 加载第 0 个样本的点云
-            loader = PointCloudLoader(samples=8000)
-            pts = loader.load(e0["model_path"])
-            print("Points shape:", None if pts is None else pts.shape)
-    else:
-        print("请先把 root 换成真实的数据集根目录")
+        return apply(points), apply(vertices)

@@ -4,6 +4,7 @@ import os
 import sys
 import traceback
 from neural_fusion.pipelines.sculptor import SculptingPipeline
+from scripts.hooks.pipeline.vis_pt_mesh_fit import PartQuadricVisHook
 
 def load_config(config_path):
     with open(config_path, 'r') as f:
@@ -34,7 +35,8 @@ if __name__ == "__main__":
     # 3. 运行 Pipeline
     try:
         print(cfg)
-        sp = SculptingPipeline()
+        hooks = [PartQuadricVisHook(lim=1.2, res=100, max_parts=10)]
+        sp = SculptingPipeline(hooks=hooks)
         sp.run(cfg)
     except Exception as e:
         print(f"Pipeline failed: {e}")

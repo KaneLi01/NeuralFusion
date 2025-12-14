@@ -13,6 +13,9 @@ class SculptingBlender:
         
     def add(self, f, p, c): 
         self.prims.append({'f':f, 'p':p, 'c':c})
+    
+    def upgrade(self, f, p, c): 
+        self.prims = [{'f':f, 'p':p, 'c':c}]
         
     def eval(self, pts):
         # 1. Evaluate the Raw Stone (Bounding Sphere)

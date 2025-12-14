@@ -4,7 +4,7 @@ import numpy as np
 from skimage.measure import marching_cubes # 记得安装 scikit-image
 import open3d as o3d
 
-from datasets.datasets_loader.shapenetv2 import DatasetIndex, PointCloudLoader
+from datasets.datasets_loader.shapenetv2 import DatasetIndex, GeometryLoader
 from neural_fusion.geometry.fitting import QuadricFitter
 from neural_fusion.geometry.primitives import BoundingSphere
 from neural_fusion.geometry.augmentor import GeometricAugmentor
@@ -12,23 +12,30 @@ from neural_fusion.segmentation.patch import PatchSegmenter
 from neural_fusion.segmentation.refiner import HomogeneityRefiner
 from neural_fusion.modeling.blender import SculptingBlender
 from utils.vis.viewer import Viewer
+from utils.geo3d import make_cube_grid, make_grid_from_bounds, compute_points_cm
 
 class SculptingPipeline:
-    def __init__(self):
+    def __init__(self, hooks=None):
         self.debug = Viewer()   # 可以是 None
+        self.hooks = hooks or []
 
-    def _dbg(self, **kwargs):
+    def _dbg(self, rupt=True, **kwargs):
         if self.debug is None:
             return
         # 统一在一个地方决定怎么用这些中间结果
         if "objectives" in kwargs:
             self.debug.show_objects(items=kwargs["objectives"])  
-        raise Exception("debug over")
-    
+        if rupt:
+            raise Exception("debug over")
+
+    def _emit(self, name: str, **kwargs):
+        for h in self.hooks:
+            fn = getattr(h, name, None)
+            if fn is not None:
+                fn(**kwargs)
+
     def _random_color(self):
-        pcd = o3d.geometry.PointCloud()
         color = np.random.rand(3).tolist()
-        # return pcd.paint_uniform_color(color)
         return color
 
     @staticmethod
@@ -66,7 +73,7 @@ class SculptingPipeline:
         dataset_path = cfg['dataset_path']
 
         # 2. 初始化组件
-        data_loader = PointCloudLoader(samples=5000)
+        data_loader = GeometryLoader(samples=5000)
         fitter = QuadricFitter(regularization=fitter_k)
         segmenter = PatchSegmenter(n_patches=n_patches) 
         refiner = HomogeneityRefiner(fitter=fitter)
@@ -89,7 +96,7 @@ class SculptingPipeline:
             print(f"\n[{i+1}] Sculpting: {fname}")
             
             # 1. Load Data
-            points = data_loader.load(fpath)
+            points, vertices, faces = data_loader.load(fpath, return_points=True, return_faces=True)
             if points is None: continue
 
             # 2. Define Raw Stone (Bounding Sphere) [Step 1 of Prompt]
@@ -106,10 +113,8 @@ class SculptingPipeline:
             # We initialize the blender with the Raw Stone
             blender = SculptingBlender(raw_stone)
             
-            _dbg_list = []
             for part_id in unique_parts:
                 part_pts = points[labels == part_id]
-                _dbg_list.append((part_pts, self._random_color()))
                 if len(part_pts) < 10: continue
                 
                 # Augment the region with surface points (Step 3 of prompt)
@@ -120,17 +125,31 @@ class SculptingPipeline:
                 # Fit Ellipsoid (Step 4)
                 p, c = fitter.fit(np.vstack([part_pts, aug]))
                 # p, c = fitter.fit(part_pts)  # 没有augment
-                
+
+                self._emit(
+                    "on_part_fitted",
+                    part_id=int(part_id),
+                    part_pts=part_pts,
+                    aug_pts=aug,
+                    vertices=vertices,
+                    faces=faces,
+                    fitter=fitter,
+                    params=p,
+                    center=c,
+                    raw_stone=raw_stone,
+                    blender_cls=SculptingBlender,   # 传类，hook 内部自己 new
+                    model_name=fname,
+                )
+
                 # Add to sculpting tool
                 blender.add(fitter, p, c)
-            # self._dbg(objectives=_dbg_list)
+
             # 5. Carve (Intersection of Stone and Fits) [Step 5]
             # This happens inside blender.eval()
             
             # 6. Meshing
             res = 100; lim = 1.2
-            x = np.linspace(-lim, lim, res)
-            grid = np.stack(np.meshgrid(x, x, x, indexing='ij'), axis=-1).reshape(-1, 3)
+            grid = make_cube_grid(lim=lim, res=res)
             vals = blender.eval(grid).reshape(res, res, res)
             
             try:
