@@ -73,7 +73,7 @@ class MeshEvaluator:
         self.fidx = [0, 1, 2, 3, 4]
         self.metric_names = metric_names
 
-    def eval_mesh(self, mesh, pointcloud_tgt, normals_tgt, onet_samples=None):
+    def eval_mesh(self, mesh, pointcloud_tgt, normals_tgt=None, onet_samples=None):
         """
         Evaluates a mesh.
         :param mesh: (o3d.geometry.TriangleMesh) mesh which should be evaluated
@@ -82,10 +82,11 @@ class MeshEvaluator:
         :param onet_samples: (Nx3, N) onet samples and occupancy (latter is 1 inside, 0 outside)
         :return: metric-dict
         """
+        print('start eval')
         if isinstance(pointcloud_tgt, torch.Tensor):
             pointcloud_tgt = pointcloud_tgt.detach().cpu().numpy().astype(float)
 
-        if isinstance(normals_tgt, torch.Tensor):
+        if normals_tgt is not None and isinstance(normals_tgt, torch.Tensor):
             normals_tgt = normals_tgt.detach().cpu().numpy().astype(float)
 
         # Triangle normal is used to be consistent with SAP.
@@ -118,6 +119,15 @@ class MeshEvaluator:
         if pointcloud.shape[0] == 0:
             exp.logger.warning('Empty pointcloud / mesh detected! Return NaN metric!')
             return {k: NAN_METRIC for k in self.metric_names}
+
+        if pointcloud_tgt is not None:
+            pointcloud_tgt = pointcloud_tgt.astype(np.float32)
+        if pointcloud is not None:
+            pointcloud = pointcloud.astype(np.float32)
+        if normals is not None:
+            normals = normals.astype(np.float32)
+        if normals_tgt is not None:
+            normals_tgt = normals_tgt.astype(np.float32)
 
         # Completeness: how far are the points of the target point cloud
         # from thre predicted point cloud

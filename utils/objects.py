@@ -1,12 +1,13 @@
 # utils/visualization/objects.py
 import numpy as np
+import open3d as o3d
 
-class VisObject:
-    """所有可视化对象的基类，只定义接口，不做实现。"""
+class Object3D:
+    """所有3D对象的基类，只定义接口，不做实现。"""
     pass
 
 
-class PointCloudObject(VisObject):
+class PointCloudObject(Object3D):
     def __init__(self, points, colors=None, normals=None):
         self.points = np.asarray(points, dtype=np.float32)
         self.colors = None if colors is None else np.asarray(colors, dtype=np.float32)
@@ -41,7 +42,7 @@ class PointCloudObject(VisObject):
         print(f"  Max: {mx}")
 
 
-class MeshObject(VisObject):
+class MeshObject(Object3D):
     def __init__(self, vertices, faces, colors=None, normals=None, uv=None, texture=None):
         self.vertices = np.asarray(vertices, dtype=np.float32)
         self.faces = np.asarray(faces, dtype=np.int32)
@@ -50,8 +51,10 @@ class MeshObject(VisObject):
         self.uv = uv
         self.texture = texture   # 可以先留空，将来你要搞贴图再用
 
+    def to_o3d_mesh(self):
+        m = o3d.geometry.TriangleMesh()
+        m.vertices = o3d.utility.Vector3dVector(self.vertices)
+        m.triangles = o3d.utility.Vector3iVector(self.faces)
+        m.compute_vertex_normals()
 
-class ImageObject(VisObject):
-    def __init__(self, image):
-        # H x W x 3 or 1
-        self.image = np.asarray(image)
+        return m

@@ -1,6 +1,6 @@
 import numpy as np
 from .base import BaseRenderer
-from .objects import PointCloudObject, MeshObject
+from ..objects import PointCloudObject, MeshObject
 
 try:
     import open3d as o3d
@@ -45,7 +45,7 @@ class Open3DRenderer(BaseRenderer):
 
         # 情况 3：单个 mesh
         if isinstance(obj, MeshObject):
-            geoms.append(self._to_o3d_mesh(obj))
+            geoms.append(obj.to_o3d_mesh())
             return geoms
 
         # 其他类型：直接忽略或抛错，你可以按需要改

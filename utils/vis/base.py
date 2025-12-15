@@ -1,11 +1,11 @@
 # utils/visualization/base.py
-from .objects import VisObject, PointCloudObject, MeshObject, ImageObject
+from ..objects import Object3D, PointCloudObject, MeshObject
 
 class BaseRenderer:
     """
     所有渲染器的基类。
     """
-    def render(self, obj: VisObject, **kwargs):
+    def render(self, obj: Object3D, **kwargs):
         """渲染单个对象"""
         raise NotImplementedError
 

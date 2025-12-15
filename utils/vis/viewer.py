@@ -3,7 +3,7 @@ import imageio.v2 as imageio
 import numpy as np
 import datasets.datasets_loader.shapenetv2 as snv2
 
-from .objects import PointCloudObject, MeshObject, ImageObject
+from ..objects import PointCloudObject, MeshObject
 from .open3d_renderer import Open3DRenderer
 
 class Viewer:

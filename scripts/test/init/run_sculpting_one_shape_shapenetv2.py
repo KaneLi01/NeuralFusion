@@ -14,30 +14,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # 允许用户通过命令行指定使用哪个配置文件
     parser.add_argument("--config", type=str, 
-                        default="configs/default_sculpting.yaml", 
+                        default="configs/default_sculpting_one_shape.yaml", 
                         help="Path to configuration file")
-    
-    # 进阶技巧：允许通过命令行覆盖某个参数（可选）
-    parser.add_argument("--data", type=str, default=None, help="Override dataset path")
 
     args = parser.parse_args()
 
-    # 1. 读取配置
     if not os.path.exists(args.config):
         raise FileNotFoundError(f"Config file not found: {args.config}")
     
     cfg = load_config(args.config)
 
-    # 2. 命令行参数优先级更高 (覆盖配置文件的值)
-    if args.data:
-        cfg['dataset_path'] = args.data
-
-    # 3. 运行 Pipeline
     try:
         print(cfg)
-        hooks = [PartQuadricVisHook(lim=1.2, res=100, max_parts=10)]
+        hooks = [PartQuadricVisHook()]
         sp = SculptingPipeline(hooks=hooks)
-        sp.run(cfg)
+        sp.run(cfg, cfg['dataset_path'])
     except Exception as e:
         print(f"Pipeline failed: {e}")
         traceback.print_exc()

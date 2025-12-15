@@ -11,8 +11,10 @@ from neural_fusion.geometry.augmentor import GeometricAugmentor
 from neural_fusion.segmentation.patch import PatchSegmenter
 from neural_fusion.segmentation.refiner import HomogeneityRefiner
 from neural_fusion.modeling.blender import SculptingBlender
+from neural_fusion.metrics.rec_mesh import MeshEvaluator
 from utils.vis.viewer import Viewer
 from utils.geo3d import make_cube_grid, make_grid_from_bounds, compute_points_cm
+from utils.objects import MeshObject
 
 class SculptingPipeline:
     def __init__(self, hooks=None):
@@ -42,9 +44,8 @@ class SculptingPipeline:
     def get_model_paths(dataset_path):
         """Automatic loader that accepts both:
            1) Single file (.ply / .obj / .stl ...)
-           2) Dataset root directory (ShapeNet style)
         """
-        # Case 1: 单模型路径
+
         if os.path.isfile(dataset_path):
             if dataset_path.lower().endswith(('.ply', '.obj', '.stl', '.off')):
                 print(f"[Loader] Single model detected: {dataset_path}")
@@ -52,25 +53,16 @@ class SculptingPipeline:
             else:
                 raise ValueError(f"File type not supported: {dataset_path}")
 
-        # Case 2: 根目录 → 使用 DatasetIndex 扫描
-        if os.path.isdir(dataset_path):
-            print(f"[Loader] Dataset directory detected, scanning with DatasetIndex...")
-            index = DatasetIndex(dataset_path)
-            model_paths = [entry["model_path"] for entry in index.entries]
-            print(f"[Loader] Found {len(model_paths)} models.")
-            return model_paths
-
         # Case 3: 无效路径
         raise ValueError(f"Invalid dataset_path: {dataset_path}")
 
-    def run(self, cfg):
+    def run(self, cfg, data_path):
 
         # 1. 解析参数 (使用 .get 设置默认值，防止配置文件漏写报错)
         fitter_k = cfg['quadric_fitter'].get('k', 2000.0)
         n_patches = cfg['patch_segmenter'].get('n_patches', 30)
         err_tol = cfg['refiner'].get('error_tolerance', 0.005)
         aug_thick = cfg['augmentor'].get('thickness', 0.04)
-        dataset_path = cfg['dataset_path']
 
         # 2. 初始化组件
         data_loader = GeometryLoader(samples=5000)
@@ -78,16 +70,17 @@ class SculptingPipeline:
         segmenter = PatchSegmenter(n_patches=n_patches) 
         refiner = HomogeneityRefiner(fitter=fitter)
         augmentor = GeometricAugmentor()
-        model_paths = SculptingPipeline.get_model_paths(dataset_path)
+        model_paths = SculptingPipeline.get_model_paths(data_path)
         viewer = Viewer()
+        mesh_eval = MeshEvaluator()
         print(f"--- Running sculpting on {len(model_paths)} model(s) ---")
 
         print(f"--- SCULPTOR PIPELINE (Config Loaded) ---")
         print(f"    K={fitter_k}, Patches={n_patches}, Tol={err_tol}")
 
         # 源代码
-        if os.name == 'nt' and not dataset_path.startswith('\\\\?\\'):
-            dataset_path = '\\\\?\\' + os.path.abspath(dataset_path)
+        if os.name == 'nt' and not data_path.startswith('\\\\?\\'):
+            data_path = '\\\\?\\' + os.path.abspath(data_path)
 
         print(f"--- SCULPTOR PIPELINE (Carving Stone) ---")
 
@@ -97,6 +90,7 @@ class SculptingPipeline:
             
             # 1. Load Data
             points, vertices, faces = data_loader.load(fpath, return_points=True, return_faces=True)
+            self._emit("register", raw_points=points, raw_vertices=vertices, raw_faces=faces)
             if points is None: continue
 
             # 2. Define Raw Stone (Bounding Sphere) [Step 1 of Prompt]
@@ -126,20 +120,8 @@ class SculptingPipeline:
                 p, c = fitter.fit(np.vstack([part_pts, aug]))
                 # p, c = fitter.fit(part_pts)  # 没有augment
 
-                self._emit(
-                    "on_part_fitted",
-                    part_id=int(part_id),
-                    part_pts=part_pts,
-                    aug_pts=aug,
-                    vertices=vertices,
-                    faces=faces,
-                    fitter=fitter,
-                    params=p,
-                    center=c,
-                    raw_stone=raw_stone,
-                    blender_cls=SculptingBlender,   # 传类，hook 内部自己 new
-                    model_name=fname,
-                )
+                # 可视化中间结果
+                # self._emit("patch_check", part_pts=part_pts, aug_pts=aug, params=p, center=c)
 
                 # Add to sculpting tool
                 blender.add(fitter, p, c)
@@ -154,10 +136,12 @@ class SculptingPipeline:
             
             try:
                 verts, faces, _, _ = marching_cubes(vals, 0.0)
-                verts = verts / (res-1) * (2*lim) - lim
-                
+                verts = verts / (res-1) * (2*lim) - lim              
                 print(f"    -> Sculpture Finished: {len(verts)} vertices.")
-                viewer.show_point_mesh(points=points, vertices=verts, faces=faces, colors=None, normals=None)
+                result_mesh = MeshObject(verts, faces).to_o3d_mesh()
+                result_metric = mesh_eval.eval_mesh(mesh=result_mesh, pointcloud_tgt=points)
+                return result_metric                 
+                # viewer.show_point_mesh(points=points, vertices=verts, faces=faces, colors=None, normals=None)
 
                 
             except Exception as e:
@@ -167,5 +151,4 @@ class SculptingPipeline:
                     # Fallback if iso-surface 0 is missed
                     verts, faces, _, _ = marching_cubes(vals, vals.min() + 0.1)
                     verts = verts / (res-1) * (2*lim) - lim
-                    # SculptingPipeline.visualize_overlay(points, verts, faces, f"Sculpture (Fallback): {fname}")
                 except: pass
