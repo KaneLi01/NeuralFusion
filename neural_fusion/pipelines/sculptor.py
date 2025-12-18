@@ -10,8 +10,9 @@ from neural_fusion.geometry.primitives import BoundingSphere
 from neural_fusion.geometry.augmentor import GeometricAugmentor
 from neural_fusion.segmentation.patch import PatchSegmenter
 from neural_fusion.segmentation.refiner import HomogeneityRefiner
-from neural_fusion.modeling.blender import SculptingBlender
+from neural_fusion.modeling.blender import SculptingBlender, SculptingBlender_
 from neural_fusion.metrics.rec_mesh import MeshEvaluator
+from neural_fusion.ops.math_utils import OrientedBounds
 from utils.vis.viewer import Viewer
 from utils.geo3d import make_cube_grid, make_grid_from_bounds, compute_points_cm
 from utils.objects import MeshObject
@@ -106,6 +107,7 @@ class SculptingPipeline:
             # 4. Augment & Fit (The Chisel) [Step 3 & 4]
             # We initialize the blender with the Raw Stone
             blender = SculptingBlender(raw_stone)
+            blender_ = SculptingBlender_()
             
             for part_id in unique_parts:
                 part_pts = points[labels == part_id]
@@ -115,7 +117,7 @@ class SculptingPipeline:
                 # Instead of adding sphere points (which causes artifacts),
                 # we augment locally to ensure the quadric fits the surface patch tightly.
                 aug = augmentor.augment(part_pts, 0.04)
-                
+                patch_bbox = OrientedBounds.fit(part_pts)
                 # Fit Ellipsoid (Step 4)
                 p, c = fitter.fit(np.vstack([part_pts, aug]))
                 # p, c = fitter.fit(part_pts)  # 没有augment
@@ -125,6 +127,7 @@ class SculptingPipeline:
 
                 # Add to sculpting tool
                 blender.add(fitter, p, c)
+                blender_.add(fitter, p, c, patch_bbox)
 
             # 5. Carve (Intersection of Stone and Fits) [Step 5]
             # This happens inside blender.eval()
@@ -133,6 +136,7 @@ class SculptingPipeline:
             res = 100; lim = 1.2
             grid = make_cube_grid(lim=lim, res=res)
             vals = blender.eval(grid).reshape(res, res, res)
+            vals_ = blender_.eval(grid).reshape(res, res, res)
             
             try:
                 verts, faces, _, _ = marching_cubes(vals, 0.0)
@@ -140,8 +144,15 @@ class SculptingPipeline:
                 print(f"    -> Sculpture Finished: {len(verts)} vertices.")
                 result_mesh = MeshObject(verts, faces).to_o3d_mesh()
                 result_metric = mesh_eval.eval_mesh(mesh=result_mesh, pointcloud_tgt=points)
+                viewer.show_point_mesh(points=points, vertices=verts, faces=faces, colors=None, normals=None)
+                
+                verts, faces, _, _ = marching_cubes(vals_, 0.0)
+                verts = verts / (res-1) * (2*lim) - lim              
+                viewer.show_point_mesh(points=points, vertices=verts, faces=faces, colors=None, normals=None)
+
+
+
                 return result_metric                 
-                # viewer.show_point_mesh(points=points, vertices=verts, faces=faces, colors=None, normals=None)
 
                 
             except Exception as e:
